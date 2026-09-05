@@ -45,9 +45,9 @@ async function emitRunningSnapshot(
   harness: Awaited<ReturnType<typeof launchDesktop>>,
   window: Parameters<typeof getDesktopState>[0],
   queuedMessages: readonly SessionQueuedMessage[],
+  timestamp = new Date().toISOString(),
 ): Promise<void> {
   const context = await selectedSessionContext(window);
-  const timestamp = new Date().toISOString();
   const event: Extract<SessionDriverEvent, { type: "sessionUpdated" }> = {
     type: "sessionUpdated",
     sessionRef: context.sessionRef,
@@ -66,6 +66,40 @@ async function emitRunningSnapshot(
   };
   await emitTestSessionEvent(harness, event);
 }
+
+test("ignores a stale empty queue snapshot instead of hiding a pending message", async () => {
+  test.setTimeout(60_000);
+  const userDataDir = await makeUserDataDir();
+  const workspacePath = await makeWorkspace("queued-messages-stale-snapshot");
+  const harness = await launchDesktop(userDataDir, {
+    initialWorkspaces: [workspacePath],
+    testMode: "background",
+  });
+
+  try {
+    const window = await harness.firstWindow();
+    await createNamedThread(window, "Queued snapshot ordering");
+    const queuedAt = new Date(Date.now() + 10_000).toISOString();
+    const staleAt = new Date(Date.now() + 9_000).toISOString();
+    const clearedAt = new Date(Date.now() + 11_000).toISOString();
+    const queuedMessage: SessionQueuedMessage = {
+      id: "queued-after-stale-snapshot",
+      mode: "followUp",
+      text: "Keep this queued card visible",
+      createdAt: queuedAt,
+      updatedAt: queuedAt,
+    };
+
+    await emitRunningSnapshot(harness, window, [queuedMessage], queuedAt);
+    await emitRunningSnapshot(harness, window, [], staleAt);
+    await expect(window.getByTestId("queued-composer-message").filter({ hasText: queuedMessage.text })).toHaveCount(1);
+
+    await emitRunningSnapshot(harness, window, [], clearedAt);
+    await expect(window.getByTestId("queued-composer-messages")).toHaveCount(0);
+  } finally {
+    await harness.close();
+  }
+});
 
 async function emitQueuedMessageStarted(
   harness: Awaited<ReturnType<typeof launchDesktop>>,

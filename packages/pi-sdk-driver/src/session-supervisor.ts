@@ -1,5 +1,5 @@
 import { access, realpath, stat, unlink } from "node:fs/promises";
-import { resolve } from "node:path";
+import { isAbsolute, relative, resolve, sep } from "node:path";
 import {
   ModelRegistry,
   SessionManager,
@@ -117,6 +117,11 @@ export interface SyncWorkspaceResult {
   readonly sessions: SessionCatalogSnapshot["sessions"];
 }
 
+export interface WorkspaceSyncInput {
+  readonly path: string;
+  readonly displayName?: string;
+}
+
 interface ManagedSessionRecord {
   ref: SessionRef;
   workspace: WorkspaceRef;
@@ -222,6 +227,44 @@ export class SessionSupervisor {
   async syncWorkspace(path: string, displayName?: string): Promise<SyncWorkspaceResult> {
     const workspace = await this.registerWorkspace(path, displayName);
     const infos = await SessionManager.list(path);
+    return this.syncWorkspaceFromInfos(workspace, infos);
+  }
+
+  /** Reconcile CLI sessions into their longest registered workspace ancestor. */
+  async syncWorkspaces(inputs: readonly WorkspaceSyncInput[]): Promise<SyncWorkspaceResult[]> {
+    const workspaces = await Promise.all(
+      inputs.map(({ path, displayName }) => this.registerWorkspace(path, displayName)),
+    );
+    const allInfos = await SessionManager.listAll();
+    const globallyDiscoveredPaths = new Set(allInfos.map((info) => info.path));
+    const infosByWorkspaceId = new Map(workspaces.map((workspace) => [workspace.workspaceId, [] as SessionInfo[]]));
+    const workspacesBySpecificity = [...workspaces].sort((a, b) => b.path.length - a.path.length);
+
+    for (const info of allInfos) {
+      if (!info.cwd) {
+        continue;
+      }
+      const workspace = workspacesBySpecificity.find((candidate) => isPathWithin(candidate.path, info.cwd));
+      if (workspace) {
+        infosByWorkspaceId.get(workspace.workspaceId)?.push(info);
+      }
+    }
+
+    return Promise.all(
+      workspaces.map(async (workspace) => {
+        const assigned = infosByWorkspaceId.get(workspace.workspaceId) ?? [];
+        const exactInfos = await SessionManager.list(workspace.path);
+        const byPath = new Map([...exactInfos, ...assigned].map((info) => [info.path, info]));
+        return this.syncWorkspaceFromInfos(workspace, [...byPath.values()], globallyDiscoveredPaths);
+      }),
+    );
+  }
+
+  private async syncWorkspaceFromInfos(
+    workspace: WorkspaceRef,
+    infos: readonly SessionInfo[],
+    globallyDiscoveredPaths?: ReadonlySet<string>,
+  ): Promise<SyncWorkspaceResult> {
     const existingSessions = (await this.catalogs.sessions.listSessions(workspace.workspaceId)).sessions;
     const existingByKey = new Map(existingSessions.map((session) => [sessionKey(session.sessionRef), session]));
     const nextEntries = infos.map((info) =>
@@ -243,6 +286,9 @@ export class SessionSupervisor {
 
           const sessionFilePath = session.sessionFilePath ?? (await this.catalogs.getSessionFile(session.sessionRef));
           if (!sessionFilePath) {
+            return undefined;
+          }
+          if (globallyDiscoveredPaths?.has(sessionFilePath)) {
             return undefined;
           }
 
@@ -2538,6 +2584,11 @@ function sessionUpdatedEvent(record: ManagedSessionRecord): SessionDriverEvent {
     timestamp: record.updatedAt,
     snapshot: buildSnapshot(record),
   };
+}
+
+function isPathWithin(parentPath: string, candidatePath: string): boolean {
+  const child = relative(resolve(parentPath), resolve(candidatePath));
+  return child === "" || (child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child));
 }
 
 function toDriverEvents(

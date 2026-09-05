@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rename } from "node:fs/promises";
+import { join } from "node:path";
 import { expect, test } from "@playwright/test";
 import {
   createNamedThread,
@@ -135,5 +136,72 @@ test("surfaces a CLI-created session on window focus", async () => {
       .toBeGreaterThan(1);
   } finally {
     await harness.close();
+  }
+});
+
+test("imports a CLI session started below a registered workspace on next launch", async () => {
+  test.setTimeout(90_000);
+  const userDataDir = await makeUserDataDir();
+  const workspacePath = await makeWorkspace("cli-nested-session-workspace");
+  const nestedCwd = join(workspacePath, "packages", "api");
+  await mkdir(nestedCwd, { recursive: true });
+
+  const firstHarness = await launchDesktop(userDataDir, {
+    initialWorkspaces: [workspacePath],
+    testMode: "background",
+  });
+  let nestedSessionPath = "";
+  try {
+    const window = await firstHarness.firstWindow();
+    await createNamedThread(window, "Seed parent workspace");
+    const state = await getDesktopState(window);
+    const seedFilePath = await sessionFilePathFromCatalog(userDataDir, {
+      workspaceId: state.selectedWorkspaceId,
+      sessionId: state.selectedSessionId,
+    });
+    const stagedSessionPath = await createSessionFileBeside(
+      seedFilePath,
+      "cli-created-in-nested-cwd.jsonl",
+      [{ role: "user", text: "nested CLI session imported at startup" }],
+      { cwd: nestedCwd },
+    );
+    const encodedCwd = `--${nestedCwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+    const nestedSessionDir = join(userDataDir, "agent", "sessions", encodedCwd);
+    await mkdir(nestedSessionDir, { recursive: true });
+    nestedSessionPath = join(nestedSessionDir, "cli-created-in-nested-cwd.jsonl");
+    await rename(stagedSessionPath, nestedSessionPath);
+  } finally {
+    await firstHarness.close();
+  }
+
+  const secondHarness = await launchDesktop(userDataDir, {
+    initialWorkspaces: [workspacePath, nestedCwd],
+    testMode: "background",
+  });
+  try {
+    const window = await secondHarness.firstWindow();
+    await expect.poll(async () => {
+      const state = await getDesktopState(window);
+      const parentWorkspace = state.workspaces.find((entry) => entry.path === workspacePath);
+      const nestedWorkspace = state.workspaces.find((entry) => entry.path === nestedCwd);
+      if (!parentWorkspace || !nestedWorkspace) {
+        return false;
+      }
+      const nestedPaths = await Promise.all(
+        nestedWorkspace.sessions.map((session) => sessionFilePathFromCatalog(userDataDir, {
+          workspaceId: nestedWorkspace.id,
+          sessionId: session.id,
+        })),
+      );
+      const parentPaths = await Promise.all(
+        parentWorkspace.sessions.map((session) => sessionFilePathFromCatalog(userDataDir, {
+          workspaceId: parentWorkspace.id,
+          sessionId: session.id,
+        })),
+      );
+      return nestedPaths.includes(nestedSessionPath) && !parentPaths.includes(nestedSessionPath);
+    }, { timeout: 20_000 }).toBe(true);
+  } finally {
+    await secondHarness.close();
   }
 });

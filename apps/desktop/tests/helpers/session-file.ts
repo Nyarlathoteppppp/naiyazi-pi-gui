@@ -95,6 +95,7 @@ export async function createSessionFileBeside(
   siblingSessionFilePath: string,
   fileName: string,
   messages: readonly SeededSessionFileMessage[],
+  options: { readonly cwd?: string } = {},
 ): Promise<string> {
   const firstLine = (await readFile(siblingSessionFilePath, "utf8")).split("\n").find((line) => line.trim());
   const header = JSON.parse(firstLine ?? "{}") as { type?: string };
@@ -102,7 +103,12 @@ export async function createSessionFileBeside(
     throw new Error(`First line of ${siblingSessionFilePath} is not a session header`);
   }
   const sessionFilePath = join(dirname(siblingSessionFilePath), fileName);
-  const newHeader = { ...header, id: `cli-seeded-${Date.now()}`, timestamp: new Date().toISOString() };
+  const newHeader = {
+    ...header,
+    id: `cli-seeded-${Date.now()}`,
+    timestamp: new Date().toISOString(),
+    ...(options.cwd ? { cwd: options.cwd } : {}),
+  };
   await writeFile(sessionFilePath, `${JSON.stringify(newHeader)}\n`, "utf8");
   await appendMessagesToSessionFile(sessionFilePath, messages);
   return sessionFilePath;

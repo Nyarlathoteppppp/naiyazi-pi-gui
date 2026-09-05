@@ -81,6 +81,7 @@ export interface AppStoreInternals {
   updateQueuedComposerMessages(
     sessionRef: SessionRef,
     queuedMessages: readonly import("@pi-gui/session-driver").SessionQueuedMessage[] | undefined,
+    snapshotUpdatedAt?: string,
   ): void;
   getQueuedComposerMessages(sessionRef: SessionRef): readonly QueuedComposerMessage[];
   setQueuedComposerEditState(sessionRef: SessionRef, editState: QueuedComposerEditState | undefined): void;

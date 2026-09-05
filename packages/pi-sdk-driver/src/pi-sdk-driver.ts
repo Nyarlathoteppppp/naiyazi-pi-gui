@@ -24,6 +24,7 @@ import {
   SessionSupervisor,
   type PiSdkDriverOptions,
   type SyncWorkspaceResult,
+  type WorkspaceSyncInput,
 } from "./session-supervisor.js";
 import { RuntimeSupervisor, type RuntimeSupervisorOptions } from "./runtime-supervisor.js";
 import { createRuntimeDependencies } from "./runtime-deps.js";
@@ -146,6 +147,10 @@ export class PiSdkDriver implements SessionDriver {
 
   syncWorkspace(path: string, displayName?: string): Promise<SyncWorkspaceResult> {
     return this.supervisor.syncWorkspace(path, displayName);
+  }
+
+  syncWorkspaces(inputs: readonly WorkspaceSyncInput[]): Promise<SyncWorkspaceResult[]> {
+    return this.supervisor.syncWorkspaces(inputs);
   }
 
   reconcileWorkspace(workspaceId: WorkspaceId): Promise<SyncWorkspaceResult | undefined> {

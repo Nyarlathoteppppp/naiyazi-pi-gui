@@ -36,6 +36,7 @@ export class SessionStateMap {
   readonly composerDraftsBySession = new Map<string, string>();
   readonly composerAttachmentsBySession = new Map<string, ComposerAttachment[]>();
   readonly queuedComposerMessagesBySession = new Map<string, QueuedComposerMessage[]>();
+  readonly queuedComposerSnapshotAtBySession = new Map<string, string>();
   readonly queuedComposerEditsBySession = new Map<string, QueuedComposerEditState>();
   readonly sessionConfigBySession = new Map<string, SessionConfig>();
   readonly lastViewedAtBySession = new Map<string, string>();
@@ -79,6 +80,7 @@ export class SessionStateMap {
       this.composerDraftsBySession,
       this.composerAttachmentsBySession,
       this.queuedComposerMessagesBySession,
+      this.queuedComposerSnapshotAtBySession,
       this.queuedComposerEditsBySession,
       this.sessionConfigBySession,
       this.lastViewedAtBySession,
@@ -137,6 +139,7 @@ export class SessionStateMap {
     this.composerDraftsBySession.delete(key);
     this.composerAttachmentsBySession.delete(key);
     this.queuedComposerMessagesBySession.delete(key);
+    this.queuedComposerSnapshotAtBySession.delete(key);
     this.queuedComposerEditsBySession.delete(key);
     this.sessionConfigBySession.delete(key);
     this.lastViewedAtBySession.delete(key);

@@ -1154,14 +1154,7 @@ export class DesktopAppStore implements AppStoreInternals {
         workspacesToSync.set(ws.path, ws.displayName);
       }
 
-      const syncDiagnostics = await Promise.all(
-        [...workspacesToSync.entries()].map(([workspacePath, displayName]) =>
-          this.syncStartupWorkspace(workspacePath, displayName),
-        ),
-      );
-      startupDiagnostics.push(
-        ...syncDiagnostics.filter((diagnostic): diagnostic is StartupDiagnostic => Boolean(diagnostic)),
-      );
+      startupDiagnostics.push(...(await this.syncStartupWorkspaces([...workspacesToSync.entries()])));
 
       await this.refreshState({
         selectedWorkspaceId: persisted.selectedWorkspaceId,
@@ -1254,26 +1247,48 @@ export class DesktopAppStore implements AppStoreInternals {
     }
   }
 
-  private async syncStartupWorkspace(
-    workspacePath: string,
-    displayName: string | undefined,
-  ): Promise<StartupDiagnostic | undefined> {
-    try {
-      const workspaceStat = await stat(workspacePath);
-      if (!workspaceStat.isDirectory()) {
-        throw new Error("Path is not a directory.");
+  private async syncStartupWorkspaces(
+    entries: readonly (readonly [workspacePath: string, displayName: string | undefined])[],
+  ): Promise<StartupDiagnostic[]> {
+    const checked = await Promise.all(
+      entries.map(async ([workspacePath, displayName]) => {
+        try {
+          const workspaceStat = await stat(workspacePath);
+          if (!workspaceStat.isDirectory()) {
+            throw new Error("Path is not a directory.");
+          }
+          return { input: { path: workspacePath, ...(displayName ? { displayName } : {}) } };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          console.warn(`[app-store] workspace unavailable during startup: ${workspacePath}: ${message}`);
+          return { diagnostic: { scope: "workspace" as const, workspacePath, message } };
+        }
+      }),
+    );
+    const diagnostics: StartupDiagnostic[] = checked.flatMap((result) => result.diagnostic ? [result.diagnostic] : []);
+    const available = checked.flatMap((result) => result.input ? [result.input] : []);
+    if (available.length > 0) {
+      try {
+        await this.driver.syncWorkspaces(available);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.warn(`[app-store] global Pi session scan failed during startup: ${message}`);
+        diagnostics.push({ scope: "application", message });
+        const fallbackResults = await Promise.allSettled(
+          available.map(({ path, displayName }) => this.driver.syncWorkspace(path, displayName)),
+        );
+        fallbackResults.forEach((result, index) => {
+          if (result.status === "fulfilled") {
+            return;
+          }
+          const workspacePath = available[index]?.path ?? "unknown workspace";
+          const fallbackMessage = result.reason instanceof Error ? result.reason.message : String(result.reason);
+          console.warn(`[app-store] fallback workspace sync failed: ${workspacePath}: ${fallbackMessage}`);
+          diagnostics.push({ scope: "workspace", workspacePath, message: fallbackMessage });
+        });
       }
-      await this.driver.syncWorkspace(workspacePath, displayName);
-      return undefined;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      console.warn(`[app-store] workspace unavailable during startup: ${workspacePath}: ${message}`);
-      return {
-        scope: "workspace",
-        workspacePath,
-        message,
-      };
     }
+    return diagnostics;
   }
 
   private publishStartupDiagnostics(diagnostics: readonly StartupDiagnostic[]): void {
@@ -1521,7 +1536,7 @@ export class DesktopAppStore implements AppStoreInternals {
     if (!this.sessionState.sessionSubscriptions.has(sessionKey(sessionRef))) {
       const snapshot = await this.driver.openSession(sessionRef);
       this.updateSessionConfig(sessionRef, snapshot.config);
-      this.updateQueuedComposerMessages(sessionRef, snapshot.queuedMessages);
+      this.updateQueuedComposerMessages(sessionRef, snapshot.queuedMessages, snapshot.updatedAt);
     }
     await this.ensureSessionSubscribed(sessionRef);
   }
@@ -2239,12 +2254,12 @@ export class DesktopAppStore implements AppStoreInternals {
         case "sessionOpened":
         case "runCompleted":
           this.updateSessionConfig(event.sessionRef, event.snapshot.config);
-          this.updateQueuedComposerMessages(event.sessionRef, event.snapshot.queuedMessages);
+          this.updateQueuedComposerMessages(event.sessionRef, event.snapshot.queuedMessages, event.snapshot.updatedAt);
           await this.refreshSessionCommands(event.sessionRef);
           break;
         case "sessionUpdated":
           this.updateSessionConfig(event.sessionRef, event.snapshot.config);
-          this.updateQueuedComposerMessages(event.sessionRef, event.snapshot.queuedMessages);
+          this.updateQueuedComposerMessages(event.sessionRef, event.snapshot.queuedMessages, event.snapshot.updatedAt);
           if (event.snapshot.status !== "running") {
             this.refreshSessionCommandsCoalesced(event.sessionRef);
           }
@@ -2264,6 +2279,7 @@ export class DesktopAppStore implements AppStoreInternals {
           this.sessionState.extensionUiBySession.delete(key);
           this.sessionState.sessionCommandsBySession.delete(key);
           this.sessionState.queuedComposerMessagesBySession.delete(key);
+          this.sessionState.queuedComposerSnapshotAtBySession.delete(key);
           this.sessionState.queuedComposerEditsBySession.delete(key);
           this.clearPendingAutoTitle(event.sessionRef);
           this.pendingRuntimeCommandsBySession.delete(key);
@@ -3126,8 +3142,19 @@ export class DesktopAppStore implements AppStoreInternals {
     }
   }
 
-  updateQueuedComposerMessages(sessionRef: SessionRef, queuedMessages: readonly SessionQueuedMessage[] | undefined): void {
+  updateQueuedComposerMessages(
+    sessionRef: SessionRef,
+    queuedMessages: readonly SessionQueuedMessage[] | undefined,
+    snapshotUpdatedAt?: string,
+  ): void {
     const key = sessionKey(sessionRef);
+    const previousSnapshotAt = this.sessionState.queuedComposerSnapshotAtBySession.get(key);
+    if (snapshotUpdatedAt && previousSnapshotAt && snapshotUpdatedAt < previousSnapshotAt) {
+      return;
+    }
+    if (snapshotUpdatedAt) {
+      this.sessionState.queuedComposerSnapshotAtBySession.set(key, snapshotUpdatedAt);
+    }
     const next = mergeQueuedComposerMessages(this.sessionState.queuedComposerMessagesBySession.get(key), queuedMessages);
     if (next.length > 0) {
       this.sessionState.queuedComposerMessagesBySession.set(key, next);
