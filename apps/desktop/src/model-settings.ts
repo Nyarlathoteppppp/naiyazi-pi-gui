@@ -1,6 +1,24 @@
 import type { ModelSettingsSnapshot, RuntimeSettingsSnapshot, RuntimeSnapshot } from "@pi-gui/session-driver/runtime-types";
+import { minimatch } from "minimatch";
 import type { DesktopAppState, WorkspaceRecord } from "./desktop-state";
 import { resolveRepoWorkspaceId } from "./workspace-roots";
+
+export function modelMatchesEnabledPatterns(
+  providerId: string,
+  modelId: string,
+  patterns: readonly string[],
+): boolean {
+  if (patterns.length === 0) {
+    return true;
+  }
+
+  const fullId = `${providerId}/${modelId}`;
+  return patterns.some(
+    (pattern) =>
+      minimatch(fullId, pattern, { nocase: true }) ||
+      minimatch(modelId, pattern, { nocase: true }),
+  );
+}
 
 export function toModelSettingsSnapshot(settings: RuntimeSettingsSnapshot | ModelSettingsSnapshot): ModelSettingsSnapshot {
   return {

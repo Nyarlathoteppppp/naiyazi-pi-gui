@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 import {
@@ -133,6 +134,47 @@ test("switches between app-global and per-repo model scope while worktrees inher
     await expect(optionsMenu).toContainText("GPT-5");
     await expect(optionsMenu).toContainText("GPT-4 Turbo");
     await expect(optionsMenu).not.toContainText("GPT-4o");
+  } finally {
+    await harness.close();
+  }
+});
+
+test("expands Pi model globs in desktop model pickers", async () => {
+  const userDataDir = await makeUserDataDir();
+  const agentDir = join(userDataDir, "agent");
+  const workspace = await makeWorkspace("model-glob");
+  await seedAgentDir(agentDir);
+  await writeFile(
+    join(agentDir, "settings.json"),
+    `${JSON.stringify(
+      {
+        defaultProvider: "openai",
+        defaultModel: "gpt-5",
+        defaultThinkingLevel: "medium",
+        enabledModels: ["openai/gpt-*"],
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+
+  const harness = await launchDesktop(userDataDir, {
+    agentDir,
+    initialWorkspaces: [workspace],
+    testMode: "background",
+  });
+
+  try {
+    const window = await harness.firstWindow();
+    await waitForWorkspaceByPath(window, workspace);
+    await openNewThread(window);
+    await expectNewThreadModelState(window, {
+      activeModel: "openai:gpt-5",
+      visibleModelLabels: ["GPT-5", "GPT-4o", "GPT-4 Turbo"],
+      hiddenModelLabels: [],
+    });
+    await expect(window.getByText("Default model unavailable")).toHaveCount(0);
   } finally {
     await harness.close();
   }

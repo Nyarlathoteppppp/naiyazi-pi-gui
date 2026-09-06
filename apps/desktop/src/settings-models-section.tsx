@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { RuntimeSettingsSnapshot, RuntimeSnapshot } from "@pi-gui/session-driver/runtime-types";
+import { modelMatchesEnabledPatterns } from "./model-settings";
 import {
   filterModels,
   labelForThinking,
@@ -34,11 +35,9 @@ export function SettingsModelsSection({
   const activeScopedPatterns = allImplicitlyEnabled
     ? availableModels.map((model) => `${model.providerId}/${model.modelId}`)
     : enabledPatterns;
-  const activeScopedSet = new Set(activeScopedPatterns);
-
   const enabledAvailableModels = availableModels.filter((model) => {
     if (allImplicitlyEnabled) return true;
-    return activeScopedSet.has(`${model.providerId}/${model.modelId}`);
+    return modelMatchesEnabledPatterns(model.providerId, model.modelId, activeScopedPatterns);
   });
   const enabledAvailablePatterns = enabledAvailableModels.map((model) => `${model.providerId}/${model.modelId}`);
 
@@ -55,7 +54,7 @@ export function SettingsModelsSection({
   const togglePattern = (pattern: string, checked: boolean) => {
     const newPatterns = checked
       ? [...activeScopedPatterns, pattern]
-      : activeScopedPatterns.filter((entry) => entry !== pattern);
+      : enabledAvailablePatterns.filter((entry) => entry !== pattern);
     if (newPatterns.length === 0) return;
     onSetScopedModelPatterns(newPatterns);
   };
@@ -149,8 +148,8 @@ export function SettingsModelsSection({
             <div className="settings-list">
               {filteredScopedModels.map((model) => {
                 const pattern = `${model.providerId}/${model.modelId}`;
-                const enabled = activeScopedSet.has(pattern);
-                const isLast = enabled && activeScopedPatterns.length <= 1;
+                const enabled = modelMatchesEnabledPatterns(model.providerId, model.modelId, activeScopedPatterns);
+                const isLast = enabled && enabledAvailableModels.length <= 1;
                 return (
                   <label className="settings-toggle settings-toggle--row" key={pattern}>
                     <input
@@ -189,8 +188,8 @@ export function SettingsModelsSection({
             <div className="settings-list">
               {filteredModels.map((model) => {
                 const pattern = `${model.providerId}/${model.modelId}`;
-                const enabled = activeScopedSet.has(pattern);
-                const isLast = enabled && activeScopedPatterns.length <= 1;
+                const enabled = modelMatchesEnabledPatterns(model.providerId, model.modelId, activeScopedPatterns);
+                const isLast = enabled && enabledAvailableModels.length <= 1;
                 return (
                   <div
                     className="settings-option"

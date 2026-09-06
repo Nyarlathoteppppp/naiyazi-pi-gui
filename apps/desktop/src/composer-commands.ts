@@ -6,6 +6,7 @@ import type {
   RuntimeSnapshot,
 } from "@pi-gui/session-driver/runtime-types";
 import type { ExtensionCommandCompatibilityRecord } from "./desktop-state";
+import { modelMatchesEnabledPatterns } from "./model-settings";
 import { titleCase } from "./string-utils";
 
 export type ComposerSlashCommandKind =
@@ -401,13 +402,12 @@ export function buildModelOptions(
 
   const enabledPatterns = runtime.settings.enabledModelPatterns;
   const allAvailable = enabledPatterns.length === 0;
-  const enabledSet = allAvailable ? undefined : new Set(enabledPatterns);
 
   return [...runtime.models]
     .filter((model) => {
       if (!model.available) return false;
-      if (!enabledSet) return true;
-      return enabledSet.has(`${model.providerId}/${model.modelId}`);
+      if (allAvailable) return true;
+      return modelMatchesEnabledPatterns(model.providerId, model.modelId, enabledPatterns);
     })
     .sort((left: RuntimeSnapshot["models"][number], right: RuntimeSnapshot["models"][number]) => {
       const providerCompare =
