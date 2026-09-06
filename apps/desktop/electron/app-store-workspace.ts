@@ -1,4 +1,5 @@
 import { sessionKey } from "@pi-gui/pi-sdk-driver";
+import { realpath } from "node:fs/promises";
 import type { CreateSessionInput, DesktopAppState, WorkspaceSessionTarget } from "../src/desktop-state";
 import { toSessionRef } from "./app-store-utils";
 import type { AppStoreInternals, RefreshStateOptions } from "./app-store-internals";
@@ -38,6 +39,8 @@ export async function addWorkspace(store: AppStoreInternals, path: string): Prom
 
   return store.withErrorHandling(async () => {
     const synced = await store.driver.syncWorkspace(normalizedPath);
+    store.sessionState.ignoredWorkspacePaths.delete(synced.workspace.path);
+    await store.persistUiState();
     const firstSession = synced.sessions[0];
     if (firstSession) {
       await store.ensureSessionReady(firstSession.sessionRef);
@@ -82,7 +85,11 @@ export async function removeWorkspace(store: AppStoreInternals, workspaceId: str
   await store.initialize();
 
   return store.withErrorHandling(async () => {
+    const removed = store.state.workspaces.find(workspace => workspace.id === workspaceId);
+    const ignoredPath = removed?.kind === "primary" ? await realpath(removed.path).catch(() => removed.path) : undefined;
     await store.driver.removeWorkspace(workspaceId);
+    if (ignoredPath) store.sessionState.ignoredWorkspacePaths.add(ignoredPath);
+    await store.persistUiState();
     return store.refreshState(fallbackSelectionAfterWorkspaceRemoval(store.state, workspaceId));
   });
 }

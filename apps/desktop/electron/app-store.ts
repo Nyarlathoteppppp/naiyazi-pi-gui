@@ -1119,6 +1119,7 @@ export class DesktopAppStore implements AppStoreInternals {
 
   private async initializeInternal(): Promise<void> {
     const persisted = await this.readUiState();
+    for (const path of persisted.ignoredWorkspacePaths ?? []) this.sessionState.ignoredWorkspacePaths.add(path);
     const startupDiagnostics: StartupDiagnostic[] = [];
     try {
       this.restorePersistedUiState(persisted);
@@ -1267,25 +1268,15 @@ export class DesktopAppStore implements AppStoreInternals {
     );
     const diagnostics: StartupDiagnostic[] = checked.flatMap((result) => result.diagnostic ? [result.diagnostic] : []);
     const available = checked.flatMap((result) => result.input ? [result.input] : []);
-    if (available.length > 0) {
+    {
       try {
-        await this.driver.syncWorkspaces(available);
+        await this.driver.syncWorkspaces(available, [...this.sessionState.ignoredWorkspacePaths], message => {
+          diagnostics.push({ scope: "application", message });
+        });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         console.warn(`[app-store] global Pi session scan failed during startup: ${message}`);
         diagnostics.push({ scope: "application", message });
-        const fallbackResults = await Promise.allSettled(
-          available.map(({ path, displayName }) => this.driver.syncWorkspace(path, displayName)),
-        );
-        fallbackResults.forEach((result, index) => {
-          if (result.status === "fulfilled") {
-            return;
-          }
-          const workspacePath = available[index]?.path ?? "unknown workspace";
-          const fallbackMessage = result.reason instanceof Error ? result.reason.message : String(result.reason);
-          console.warn(`[app-store] fallback workspace sync failed: ${workspacePath}: ${fallbackMessage}`);
-          diagnostics.push({ scope: "workspace", workspacePath, message: fallbackMessage });
-        });
       }
     }
     return diagnostics;
@@ -2653,6 +2644,7 @@ export class DesktopAppStore implements AppStoreInternals {
       pinnedAtBySession: mapToRecord(this.sessionState.pinnedAtBySession),
       pinnedSessionOrder: this.sessionState.pinnedSessionOrder.length > 0 ? this.sessionState.pinnedSessionOrder : undefined,
       workspaceOrder: this.state.workspaceOrder.length > 0 ? this.state.workspaceOrder : undefined,
+      ignoredWorkspacePaths: [...this.sessionState.ignoredWorkspacePaths],
       modelSettingsScopeMode: this.state.modelSettingsScopeMode,
       appGlobalModelSettings: hasStoredModelSettings(this.state.globalModelSettings) ? this.state.globalModelSettings : undefined,
       themeMode: this.state.themeMode,

@@ -15,6 +15,7 @@ import type { ModelSettingsSnapshot } from "@pi-gui/session-driver/runtime-types
 import { readJsonWithBackup, writeFileAtomicQueued } from "./atomic-file-write";
 
 export interface PersistedUiState {
+  readonly ignoredWorkspacePaths?: readonly string[];
   readonly version?: 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15;
   readonly selectedWorkspaceId?: string;
   readonly selectedSessionId?: string;
@@ -78,6 +79,7 @@ export async function readPersistedUiState(uiStateFilePath: string): Promise<Leg
       pinnedAtBySession: toStringRecord(candidate.pinnedAtBySession),
       pinnedSessionOrder: toStringArray(candidate.pinnedSessionOrder),
       workspaceOrder: toStringArray(candidate.workspaceOrder),
+      ignoredWorkspacePaths: toStringArray(candidate.ignoredWorkspacePaths),
       modelSettingsScopeMode:
         candidate.modelSettingsScopeMode === "per-repo" || candidate.modelSettingsScopeMode === "app-global"
           ? candidate.modelSettingsScopeMode

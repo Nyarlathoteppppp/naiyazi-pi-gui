@@ -32,6 +32,7 @@ export interface QueuedComposerEditState {
  * place instead of manually repeating the list across call sites.
  */
 export class SessionStateMap {
+  readonly ignoredWorkspacePaths = new Set<string>();
   readonly transcriptCache = new Map<string, TranscriptMessage[]>();
   readonly composerDraftsBySession = new Map<string, string>();
   readonly composerAttachmentsBySession = new Map<string, ComposerAttachment[]>();

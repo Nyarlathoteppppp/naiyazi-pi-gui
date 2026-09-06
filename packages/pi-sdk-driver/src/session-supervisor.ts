@@ -1,5 +1,5 @@
 import { access, realpath, stat, unlink } from "node:fs/promises";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import {
   ModelRegistry,
   SessionManager,
@@ -230,40 +230,72 @@ export class SessionSupervisor {
     return this.syncWorkspaceFromInfos(workspace, infos);
   }
 
-  /** Reconcile CLI sessions into their longest registered workspace ancestor. */
-  async syncWorkspaces(inputs: readonly WorkspaceSyncInput[]): Promise<SyncWorkspaceResult[]> {
-    const workspaces = await Promise.all(
+  /** One startup discovery; focus reconciliation remains workspace-local. */
+  async syncWorkspaces(inputs: readonly WorkspaceSyncInput[], ignoredPaths: readonly string[] = [], diagnostic: (message: string) => void = console.warn): Promise<SyncWorkspaceResult[]> {
+    const workspaces = [...new Map((await Promise.all(
       inputs.map(({ path, displayName }) => this.registerWorkspace(path, displayName)),
-    );
+    )).map(workspace => [workspace.path, workspace])).values()];
     const allInfos = await SessionManager.listAll();
-    const globallyDiscoveredPaths = new Set(allInfos.map((info) => info.path));
-    const infosByWorkspaceId = new Map(workspaces.map((workspace) => [workspace.workspaceId, [] as SessionInfo[]]));
-    const workspacesBySpecificity = [...workspaces].sort((a, b) => b.path.length - a.path.length);
-
+    const existing = (await this.catalogs.sessions.listSessions()).sessions;
+    const ignored = await Promise.all(ignoredPaths.map(canonicalizePath));
+    const discovered = new Map<string, SessionInfo[]>();
+    const seenPaths = new Set<string>();
+    const seenIds = new Set<string>();
     for (const info of allInfos) {
-      if (!info.cwd) {
-        continue;
-      }
-      const workspace = workspacesBySpecificity.find((candidate) => isPathWithin(candidate.path, info.cwd));
-      if (workspace) {
-        infosByWorkspaceId.get(workspace.workspaceId)?.push(info);
+      try {
+        const file = await canonicalizePath(info.path);
+        if (seenPaths.has(file) || seenIds.has(info.id)) continue;
+        seenPaths.add(file);
+        seenIds.add(info.id);
+        if (!info.cwd) {
+          diagnostic('Session has no cwd; retaining catalog ownership: ' + info.path);
+          const owner = existing.find(entry => entry.sessionRef.sessionId === info.id || entry.sessionFilePath === info.path);
+          const workspace = workspaces.find(entry => entry.workspaceId === owner?.sessionRef.workspaceId);
+          if (workspace) discovered.set(workspace.path, [...(discovered.get(workspace.path) ?? []), info]);
+          continue;
+        }
+        const cwd = await canonicalizePath(info.cwd);
+        if (cwd === resolve('/')) {
+          diagnostic('Not auto-registering root cwd: ' + info.path);
+          if (!workspaces.some(workspace => workspace.path === cwd)) continue;
+        }
+        discovered.set(cwd, [...(discovered.get(cwd) ?? []), info]);
+      } catch (error) {
+        diagnostic('Skipping session ' + info.path + ': ' + String(error));
       }
     }
-
-    return Promise.all(
-      workspaces.map(async (workspace) => {
-        const assigned = infosByWorkspaceId.get(workspace.workspaceId) ?? [];
-        const exactInfos = await SessionManager.list(workspace.path);
-        const byPath = new Map([...exactInfos, ...assigned].map((info) => [info.path, info]));
-        return this.syncWorkspaceFromInfos(workspace, [...byPath.values()], globallyDiscoveredPaths);
-      }),
-    );
+    // Decide against the original registered set so listAll ordering cannot change ownership.
+    const registered = [...workspaces];
+    for (const cwd of discovered.keys()) {
+      if (registered.some(workspace => isPathWithin(workspace.path, cwd))) continue;
+      if (ignored.some(path => isPathWithin(path, cwd))) continue;
+      try {
+        if (!(await stat(cwd)).isDirectory()) throw new Error('Not a directory');
+        workspaces.push(await this.registerWorkspace(cwd, basename(cwd)));
+      } catch (error) {
+        diagnostic('Workspace unavailable: ' + cwd + ': ' + String(error));
+      }
+    }
+    const bySpecificity = [...workspaces].sort((a, b) => b.path.length - a.path.length);
+    const assigned = new Map(workspaces.map(workspace => [workspace.workspaceId, [] as SessionInfo[]]));
+    for (const [cwd, infos] of discovered) {
+      if (!registered.some(workspace => isPathWithin(workspace.path, cwd)) && ignored.some(path => isPathWithin(path, cwd))) continue;
+      const owner = bySpecificity.find(workspace => isPathWithin(workspace.path, cwd));
+      if (owner) assigned.get(owner.workspaceId)!.push(...infos);
+    }
+    const assignedIds = new Set([...assigned.values()].flat().map(info => info.id));
+    const globalPaths = new Set([
+      ...allInfos.filter(info => assignedIds.has(info.id)).map(info => info.path),
+      ...existing.filter(entry => assignedIds.has(entry.sessionRef.sessionId)).flatMap(entry => entry.sessionFilePath ? [entry.sessionFilePath] : []),
+    ]);
+    return Promise.all(workspaces.map(workspace =>
+      this.syncWorkspaceFromInfos(workspace, assigned.get(workspace.workspaceId) ?? [], globalPaths, existing)));
   }
-
   private async syncWorkspaceFromInfos(
     workspace: WorkspaceRef,
     infos: readonly SessionInfo[],
     globallyDiscoveredPaths?: ReadonlySet<string>,
+    previousEntries: SessionCatalogSnapshot["sessions"] = [],
   ): Promise<SyncWorkspaceResult> {
     const existingSessions = (await this.catalogs.sessions.listSessions(workspace.workspaceId)).sessions;
     const existingByKey = new Map(existingSessions.map((session) => [sessionKey(session.sessionRef), session]));
@@ -272,7 +304,8 @@ export class SessionSupervisor {
         workspace,
         info,
         this.records.get(sessionKey({ workspaceId: workspace.workspaceId, sessionId: info.id })),
-        existingByKey.get(sessionKey({ workspaceId: workspace.workspaceId, sessionId: info.id })),
+        existingByKey.get(sessionKey({ workspaceId: workspace.workspaceId, sessionId: info.id })) ??
+          previousEntries.find(entry => entry.sessionRef.sessionId === info.id),
       ),
     );
     const discoveredKeys = new Set(nextEntries.map((entry) => sessionKey(entry.sessionRef)));

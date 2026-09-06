@@ -1,8 +1,9 @@
-import { mkdir, readFile, rename } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 import { expect, test } from "@playwright/test";
 import {
   createNamedThread,
+  addWorkspaceViaIpc,
   getDesktopState,
   launchDesktop,
   makeUserDataDir,
@@ -22,6 +23,38 @@ import {
  * focus, the app reconciles from disk and re-renders the selected transcript —
  * WITHOUT the user re-selecting the workspace or session.
  */
+test("discovers an unregistered CLI cwd and persists Remove without deleting its session", async () => {
+  test.setTimeout(90_000);
+  const userDataDir = await makeUserDataDir();
+  const cwd = await makeWorkspace("discovered-cli");
+  const sessionDir = join(userDataDir, "agent", "sessions", "--fixture--");
+  await mkdir(sessionDir, { recursive: true });
+  const sessionFile = join(sessionDir, "cli.jsonl");
+  await writeFile(sessionFile, JSON.stringify({type: "session", version: 3, id: "discovered-cli", cwd, timestamp: new Date().toISOString()}) + "\n");
+  await appendMessagesToSessionFile(sessionFile, [{role: "user", text: "CLI discovery evidence"}]);
+  await writeFile(join(sessionDir, "broken.jsonl"), "not json\n");
+  let harness = await launchDesktop(userDataDir, {initialWorkspaces: [], testMode: "background"});
+  try {
+    const window = await harness.firstWindow();
+    await expect.poll(async () => (await getDesktopState(window)).workspaces.find(w => w.path === cwd)?.sessions.length).toBe(1);
+    window.once("dialog", dialog => void dialog.accept());
+    await window.getByRole("button", {name: `Workspace actions for ${basename(cwd)}`}).click();
+    await window.locator(".workspace-menu").last().getByRole("button", {name: "Remove", exact: true}).click();
+    await expect.poll(async () => (await getDesktopState(window)).workspaces.some(w => w.path === cwd)).toBe(false);
+  } finally { await harness.close(); }
+  harness = await launchDesktop(userDataDir, {initialWorkspaces: [], testMode: "background"});
+  try {
+    const window = await harness.firstWindow();
+    expect((await getDesktopState(window)).workspaces.some(w => w.path === cwd)).toBe(false);
+    expect(await readFile(sessionFile, "utf8")).toContain("CLI discovery evidence");
+    // Folder picker is native-lane coverage; reuse its existing IPC helper here.
+    await addWorkspaceViaIpc(window, cwd);
+    await expect.poll(async () => (await getDesktopState(window)).workspaces.find(w => w.path === cwd)?.sessions.length).toBe(1);
+    const persisted = JSON.parse(await readFile(join(userDataDir, "ui-state.json"), "utf8"));
+    expect(persisted.ignoredWorkspacePaths).not.toContain(cwd);
+  } finally { await harness.close(); }
+});
+
 test("reflects an external append to the selected session's JSONL on window focus", async () => {
   test.setTimeout(90_000);
   const userDataDir = await makeUserDataDir();

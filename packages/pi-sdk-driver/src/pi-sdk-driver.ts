@@ -149,8 +149,8 @@ export class PiSdkDriver implements SessionDriver {
     return this.supervisor.syncWorkspace(path, displayName);
   }
 
-  syncWorkspaces(inputs: readonly WorkspaceSyncInput[]): Promise<SyncWorkspaceResult[]> {
-    return this.supervisor.syncWorkspaces(inputs);
+  syncWorkspaces(inputs: readonly WorkspaceSyncInput[], ignoredPaths: readonly string[] = [], diagnostic?: (message: string) => void): Promise<SyncWorkspaceResult[]> {
+    return this.supervisor.syncWorkspaces(inputs, ignoredPaths, diagnostic);
   }
 
   reconcileWorkspace(workspaceId: WorkspaceId): Promise<SyncWorkspaceResult | undefined> {
