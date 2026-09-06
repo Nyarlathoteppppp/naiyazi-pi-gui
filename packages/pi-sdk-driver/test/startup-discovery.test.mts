@@ -19,7 +19,9 @@ test('single discovery imports new cwd, respects ignores and longest ancestors w
   t.mock.method(SessionManager, 'listAll', async () => { scans++; return [...infos, infos[0]]; });
   t.mock.method(SessionManager, 'list', async () => { throw new Error('Repeated scan forbidden'); });
   const supervisor = new SessionSupervisor({ catalogFilePath: join(root, 'catalog.json') });
-  const result = await supervisor.syncWorkspaces([{path: join(root, 'repo')}, {path: join(root, 'repo/api')}], [join(root, 'ignored')], () => {});
+  const diagnostics: string[] = [];
+  const result = await supervisor.syncWorkspaces([{path: join(root, 'repo')}, {path: join(root, 'repo/api')}], [join(root, 'ignored')], message => diagnostics.push(message));
+  assert.deepEqual(diagnostics, [], 'Skipping root cwd is not a startup warning');
   assert.equal(scans, 1);
   assert.equal(result.length, 5);
   assert.equal(result.flatMap(x => x.sessions).length, 5);

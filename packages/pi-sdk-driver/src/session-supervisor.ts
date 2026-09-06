@@ -256,7 +256,7 @@ export class SessionSupervisor {
         }
         const cwd = await canonicalizePath(info.cwd);
         if (cwd === resolve('/')) {
-          diagnostic('Not auto-registering root cwd: ' + info.path);
+          console.info('[pi-gui] Not auto-registering root cwd: ' + info.path);
           if (!workspaces.some(workspace => workspace.path === cwd)) continue;
         }
         discovered.set(cwd, [...(discovered.get(cwd) ?? []), info]);
